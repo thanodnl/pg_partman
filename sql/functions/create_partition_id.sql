@@ -39,6 +39,7 @@ v_sub_control           text;
 v_sub_partition_type    text; 
 v_sub_id_max            bigint;
 v_sub_id_min            bigint;
+v_tableam               text;
 v_template_table        text;
 v_unlogged              char;
 
@@ -162,6 +163,25 @@ FOREACH v_id IN ARRAY p_partition_ids LOOP
         v_sql := v_sql || format(' INCLUDING INDEXES) ', v_sub_control);
     END IF;
 
+    -- for pg12 and higher, when using native partitioning, we want to use the same table access method as the template table
+    IF current_setting('server_version_num')::int >= 120000 AND v_partition_type = 'native' THEN
+        -- only if we have a template table
+        IF v_template_table IS NOT NULL THEN
+            -- load table am name from template table
+            SELECT a.amname
+            INTO v_tableam
+            FROM pg_catalog.pg_class c
+            JOIN pg_catalog.pg_namespace n ON c.relnamespace = n.oid
+            JOIN pg_am a ON c.relam = a.oid
+            WHERE n.nspname = split_part(v_template_table, '.', 1)::name
+            AND c.relname = split_part(v_template_table, '.', 2)::name;
+
+            -- if we could find the table am on the template add a USING clause with tableam name for the new table
+            IF v_tableam IS NOT NULL THEN
+                v_sql := v_sql || ' USING ' || v_tableam;
+            END IF;
+        END IF;
+    END IF;
 
     IF current_setting('server_version_num')::int < 120000 THEN
         -- column removed from pgclass in pg12
