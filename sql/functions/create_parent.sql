@@ -66,6 +66,7 @@ v_step_id                       bigint;
 v_step_overflow_id              bigint;
 v_sub_parent                    text;
 v_success                       boolean := false;
+v_tableam                       text;
 v_template_schema               text;
 v_template_tablename            text;
 v_time_interval                 interval;
@@ -717,6 +718,27 @@ IF p_type = 'native' AND current_setting('server_version_num')::int >= 110000 TH
         v_sql := v_sql || ' INCLUDING GENERATED ';
     END IF;
     v_sql := v_sql || ')';
+
+    -- for pg12 and higher, we want to use the same table access method as the template table
+    IF current_setting('server_version_num')::int >= 120000 THEN
+        -- only if we have a template table
+        IF v_template_tablename IS NOT NULL THEN
+            -- load table am name from template table
+            SELECT a.amname
+            INTO v_tableam
+            FROM pg_catalog.pg_class c
+            JOIN pg_catalog.pg_namespace n ON c.relnamespace = n.oid
+            JOIN pg_am a ON c.relam = a.oid
+            WHERE n.nspname = v_template_schema
+            AND c.relname = v_template_tablename;
+
+            -- if we could find the table am on the template add a USING clause with tableam name for the new table
+            IF v_tableam IS NOT NULL THEN
+                v_sql := v_sql || ' USING ' || v_tableam;
+            END IF;
+        END IF;
+    END IF;
+
     EXECUTE v_sql;
     v_sql := format('ALTER TABLE %I.%I ATTACH PARTITION %I.%I DEFAULT'
         , v_parent_schema, v_parent_tablename, v_parent_schema, v_default_partition);
